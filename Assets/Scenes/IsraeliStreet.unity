@@ -77893,7 +77893,7 @@ Transform:
   m_GameObject: {fileID: 518745687}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -0.009999988, y: -0.20000005, z: 0.030000214}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -81446,7 +81446,6 @@ GameObject:
   - component: {fileID: 547384763}
   - component: {fileID: 547384761}
   - component: {fileID: 547384764}
-  - component: {fileID: 547384765}
   m_Layer: 0
   m_Name: Participant
   m_TagString: Participant
@@ -81463,7 +81462,7 @@ Transform:
   m_GameObject: {fileID: 547384757}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0.7071068, z: -0, w: 0.7071068}
-  m_LocalPosition: {x: 0, y: 1.7, z: 0}
+  m_LocalPosition: {x: -7.429, y: 1, z: -1.68}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -81654,23 +81653,6 @@ MonoBehaviour:
       m_Action: Rotation
       m_Flags: 0
     m_Flags: 0
---- !u!114 &547384765
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 547384757}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 11642a1fcab174ed9916b6d07495a017, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  forwardSpeed: 5
-  autoDrive: 0
-  turnRate: 40
-  driveDurationSeconds: 300
-  loopStartX: 0
 --- !u!21 &547384942
 Material:
   serializedVersion: 8

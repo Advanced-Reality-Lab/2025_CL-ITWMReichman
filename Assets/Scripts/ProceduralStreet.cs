@@ -6,6 +6,8 @@ public enum BlockType { Playground, Parking, GasStation }
 [ExecuteAlways]
 public class ProceduralStreet : MonoBehaviour
 {
+    public const float RoadEdgeZ = 3.6f; // 3.6m per lane — wide enough for a car
+
     public Transform driver;
     public GameObject roadTilePrefab;
     public GameObject[] buildingPrefabs;
@@ -15,18 +17,18 @@ public class ProceduralStreet : MonoBehaviour
     public GameObject[] playgroundPrefabs;
     public GameObject[] gasStationPrefabs;
     public GameObject trashCanPrefab;
-    public int supermarketEveryNChunks = 5; // ~2 per 5-min drive
-    public int catsPerChunk = 2;
+    public int supermarketEveryNChunks = 5;
+    public int catsPerChunk = 1;
     public int electricityPoleEveryNTiles = 5;
-    public int parkingZoneEveryNChunks = 3; // ~5 times in 5 min
-    public GameObject[] parkingCarPrefabs; // assign car prefabs from Asset Store
+    public int parkingZoneEveryNChunks = 3;
+    public GameObject[] parkingCarPrefabs;
 
     public float tileLength = 10f;
     public int tilesPerChunk = 10;
-    public int chunksAhead = 5;
+    public int chunksAhead = 3;
     public int chunksBehind = 1;
-    public float lotHalfWidth = 15.5f;
-    public float sidewalkZ = 7.0f;
+    public float lotHalfWidth = 16.5f;
+    public float sidewalkZ = 6.2f;
     public float roadY = 0.15f;
     public float lotMargin = 1.5f;
     public int playgroundEveryNChunks = 2;
@@ -44,14 +46,6 @@ public class ProceduralStreet : MonoBehaviour
     public int seedOffset = 1337;
     public bool showEditorPreview = true;
 
-    [Header("City Backdrop")]
-    [Tooltip("Material with a city panorama texture — applied to planes behind the buildings.")]
-    public Material cityBackdropMaterial;
-    [Tooltip("Distance behind the building line (metres).")]
-    public float backdropDistance = 4f;
-    [Tooltip("Height of the backdrop wall (metres).")]
-    public float backdropHeight = 50f;
-
     [Header("Block System")]
     [Tooltip("Drive Length — how many blocks total. Street hard-stops after the last block.")]
     public int driveLength = 3;
@@ -66,6 +60,14 @@ public class ProceduralStreet : MonoBehaviour
 
     void OnEnable()
     {
+        if (Application.isPlaying)
+        {
+            // Meshy buildings are 0.3–1.2M verts each. Keep shadow maps short
+            // or the GPU spends the whole frame redrawing the city for shadows.
+            QualitySettings.shadowDistance = 35f;
+            QualitySettings.shadowCascades = 2;
+            QualitySettings.pixelLightCount = 1;
+        }
         if (Application.isPlaying || showEditorPreview) RefreshChunks();
     }
 
@@ -201,60 +203,81 @@ public class ProceduralStreet : MonoBehaviour
         }
 
         if (placePlayground) Occupy(playgroundTile, playgroundSide, 2);
-        if (placeGasStation) Occupy(gasTile, gasSide, 2);
-
-        // Reserve building slots for the parking lot (tiles 2-8 on lot side)
-        // pzSide and lotSide derived purely from idx so they stay consistent
-        bool hasLot = parkingZoneEveryNChunks > 0 && idx % parkingZoneEveryNChunks == 0;
-        bool hasParkingZone = hasLot; // same condition — declared early so tree/bench/pole loops can use it
-        int pzSideDet = (idx / (parkingZoneEveryNChunks > 0 ? parkingZoneEveryNChunks : 1) % 2 == 0) ? 1 : -1;
-        int lotSide = -pzSideDet; // lot always on opposite side from street parking
         if (hasLot)
         {
             for (int t = 2; t <= 8; t++) Occupy(t, lotSide, 0);
         }
 
-        // Proven low-rise prefab indices: ApartmentBuilding=0, BauhausBld_1_Toto=3, TelAvivBld=5
-        int[] lowBldIdx = { 0, 3, 5 };
+        // Spawn the gas station before buildings so we can reserve its real footprint.
+        // The Paz lot is ~20×17 m — a thin tile slot is not enough, and background
+        // rows at lotHalfWidth+16 still collide with the canopy depth.
+        Bounds gasFootprint = default;
+        bool hasGasFootprint = false;
+        if (placeGasStation)
+        {
+            var pf = gasStationPrefabs[rng.Next(gasStationPrefabs.Length)];
+            var g = InstantiateChild(pf, chunk.transform);
+            float facingOffset = 0f;
+            var facing = g.GetComponent<BuildingFacing>();
+            if (facing != null) facingOffset = facing.yawOffset;
+            float baseYaw = (gasSide > 0 ? 180f : 0f) + facingOffset + (float)(rng.NextDouble() * 10.0 - 5.0);
+            g.transform.rotation = Quaternion.Euler(0f, baseYaw, 0f) * g.transform.rotation;
+            g.transform.position = new Vector3(chunkStartX + gasTile * tileLength, 0f, gasSide * (lotHalfWidth + 1f));
+            GroundAlign(g);
+            KeepOffRoad(g, gasSide);
+            CheapBuilding(g);
 
+            if (TryGetRendererBounds(g, out gasFootprint))
+            {
+                SpawnGasLotPad(chunk.transform, gasFootprint);
+                // Small clearance so facades don't clip the canopy, without emptying the block.
+                gasFootprint.Expand(new Vector3(1.5f, 0f, 1.5f));
+                hasGasFootprint = true;
+                int t0 = Mathf.FloorToInt((gasFootprint.min.x - chunkStartX) / tileLength);
+                int t1 = Mathf.CeilToInt((gasFootprint.max.x - chunkStartX) / tileLength);
+                for (int t = t0; t <= t1; t++) Occupy(t, gasSide, 0);
+            }
+            else
+            {
+                Occupy(gasTile, gasSide, 2);
+            }
+        }
+
+        var placedBuildings = new List<KeyValuePair<GameObject, int>>();
         if (buildingPrefabs != null && buildingPrefabs.Length > 0)
         {
-            // First 4 chunks: dense low-rise fill — every 2 tiles, no skipping, varied types
-            bool denseStart = (idx >= 0 && idx < 4);
-            int step = denseStart ? 2 : 3;
-            float skipChance = denseStart ? 0.0f : 0.10f;
-
+            // Every 20m, no skips, little jitter — a continuous street wall, not scattered lots.
+            const int step = 2;
             for (int t = 0; t < tilesPerChunk; t += step)
             {
                 for (int side = -1; side <= 1; side += 2)
                 {
-                    if (!SlotFree(t, side, 1)) continue;
-                    if (rng.NextDouble() < skipChance) continue;
+                    if (!SlotFree(t, side, 0)) continue;
 
-                    int bldChoiceIdx;
-                    if (denseStart)
-                        // Cycle through the 3 low-rise types so neighbours differ
-                        bldChoiceIdx = lowBldIdx[(t / step * 2 + (side > 0 ? 1 : 0) + idx * 3) % lowBldIdx.Length];
-                    else
-                        bldChoiceIdx = rng.Next(buildingPrefabs.Length);
-
-                    var pf = buildingPrefabs[bldChoiceIdx];
+                    var pf = buildingPrefabs[rng.Next(buildingPrefabs.Length)];
                     var b = InstantiateChild(pf, chunk.transform);
 
                     float facingOffset = 0f;
                     var facing = b.GetComponent<BuildingFacing>();
                     if (facing != null) facingOffset = facing.yawOffset;
 
-                    float baseYaw = (side > 0 ? 180f : 0f) + facingOffset + (float)(rng.NextDouble() * 10.0 - 5.0);
+                    float baseYaw = (side > 0 ? 180f : 0f) + facingOffset + (float)(rng.NextDouble() * 3.0 - 1.5);
                     b.transform.rotation = Quaternion.Euler(0f, baseYaw, 0f) * b.transform.rotation;
 
-                    float lotZ = side * (lotHalfWidth + (denseStart ? (float)(rng.NextDouble() * 1.5) : (float)(rng.NextDouble() * 3.0)));
-                    float xJit = (float)(rng.NextDouble() * (denseStart ? 2.0 : 6.0));
+                    float lotZ = side * lotHalfWidth;
+                    float xJit = (float)(rng.NextDouble() * 1.2);
                     b.transform.position = new Vector3(chunkStartX + t * tileLength + xJit, 0f, lotZ);
 
                     GroundAlign(b);
                     KeepOffRoad(b, side);
-                    Occupy(t, side, 1);
+                    if (hasGasFootprint && OverlapsGasFootprint(b, gasFootprint))
+                    {
+                        DestroySpawned(b);
+                        continue;
+                    }
+                    CheapBuilding(b);
+                    Occupy(t, side, 0);
+                    placedBuildings.Add(new KeyValuePair<GameObject, int>(b, side));
                 }
             }
         }
@@ -285,12 +308,15 @@ public class ProceduralStreet : MonoBehaviour
                         b.transform.position = new Vector3(chunkStartX + t * tileLength + xJit, 0f, side * (bgZ + zJit));
                         float sc = scaleMin + (float)(rng.NextDouble() * scaleRange);
                         b.transform.localScale *= sc;
+                        GroundAlign(b);
+                        if (hasGasFootprint && side == gasSide)
+                            NudgeOffGasFootprint(b, side, gasFootprint);
+                        if (b == null) continue;
                         CheapBuilding(b);
                     }
                 }
             }
         }
-
 
         if (placePlayground)
         {
@@ -304,61 +330,36 @@ public class ProceduralStreet : MonoBehaviour
             g.transform.position = new Vector3(chunkStartX + playgroundTile * tileLength, 0f, playgroundSide * (sidewalkZ + 4f));
             GroundAlign(g);
             KeepOffRoad(g, playgroundSide);
+            CheapBuilding(g);
+        }
 
         bool placePark = parkEveryNChunks > 0 && idx % parkEveryNChunks == 0 && blockType == BlockType.Playground;
         if (placePark)
         {
             int parkSide = (rng.NextDouble() < 0.5 ? -1 : 1);
-            // Avoid same side as playground
             if (placePlayground && parkSide == playgroundSide) parkSide = -parkSide;
             float parkX = chunkStartX;
-            float parkW = tileLength * tilesPerChunk * 0.7f; // ~70m wide
+            float parkW = tileLength * tilesPerChunk * 0.7f;
             var parkGo = new GameObject("CityPark_" + idx);
             parkGo.transform.SetParent(chunk.transform, false);
             parkGo.hideFlags = HideFlags.DontSave;
             parkGo.transform.position = new Vector3(parkX, 0f, 0f);
             var park = parkGo.AddComponent<CityPark>();
-            park.side           = parkSide;
-            park.width          = parkW;
-            park.depth          = 14f;
-            park.sidewalkEdgeZ  = sidewalkZ;
-            park.treePrefabs    = treePrefabs;
-            park.benchPrefabs   = benchPrefabs;
+            park.side = parkSide;
+            park.width = parkW;
+            park.depth = 14f;
+            park.sidewalkEdgeZ = sidewalkZ;
+            park.treePrefabs = treePrefabs;
+            park.benchPrefabs = benchPrefabs;
             park.Build();
 
-            // 2-3 cats strolling on the sidewalk near the park
-            if (catPrefab != null)
+            int numCats = catsPerChunk > 0 ? 1 : 0;
+            for (int ci = 0; ci < numCats; ci++)
             {
-                int numCats = 2 + (idx % 2);
-                for (int ci = 0; ci < numCats; ci++)
-                {
-                    float catX = parkX + (float)(rng.NextDouble() * parkW);
-                    float catZ = parkSide * (sidewalkZ - 0.8f - (float)(rng.NextDouble() * 1.2f));
-                    var catGo = new GameObject("StreetCat_" + idx + "_" + ci);
-                    catGo.transform.SetParent(chunk.transform, false);
-                    catGo.hideFlags = HideFlags.DontSave;
-                    catGo.transform.position = new Vector3(catX, 0f, catZ);
-                    var sc = catGo.AddComponent<StreetCat>();
-                    sc.catPrefab   = catPrefab;
-                    sc.patrolRange = 4f + (float)(rng.NextDouble() * 4f);
-                    sc.speed       = 0.6f + (float)(rng.NextDouble() * 0.4f);
-                    sc.Build();
-                }
+                float catX = parkX + (float)(rng.NextDouble() * parkW);
+                float catZ = parkSide * (sidewalkZ - 0.8f - (float)(rng.NextDouble() * 1.2f));
+                SpawnStreetCat(chunk.transform, new Vector3(catX, 0f, catZ), parkSide > 0 ? 90f : -90f, rng);
             }
-        }
-
-        if (placeGasStation)
-        {
-            var pf = gasStationPrefabs[rng.Next(gasStationPrefabs.Length)];
-            var g = InstantiateChild(pf, chunk.transform);
-            float facingOffset = 0f;
-            var facing = g.GetComponent<BuildingFacing>();
-            if (facing != null) facingOffset = facing.yawOffset;
-            float baseYaw = (gasSide > 0 ? 180f : 0f) + facingOffset + (float)(rng.NextDouble() * 10.0 - 5.0);
-            g.transform.rotation = Quaternion.Euler(0f, baseYaw, 0f) * g.transform.rotation;
-            g.transform.position = new Vector3(chunkStartX + gasTile * tileLength, 0f, gasSide * (lotHalfWidth + 1f));
-            GroundAlign(g);
-            KeepOffRoad(g, gasSide);
         }
 
         if (treePrefabs != null && treePrefabs.Length > 0 && !hasParkingZone)
@@ -368,7 +369,6 @@ public class ProceduralStreet : MonoBehaviour
             {
                 for (int side = -1; side <= 1; side += 2)
                 {
-                    // No trees anywhere on lot chunks (both sides clear for lot asphalt)
                     if (hasLot) continue;
                     if (rng.NextDouble() >= 0.5) continue;
                     if (t - lastTreeTile[side] < 2) continue;
@@ -379,6 +379,7 @@ public class ProceduralStreet : MonoBehaviour
                     float zJit = (float)(rng.NextDouble() * 1.5);
                     g.transform.position = new Vector3(chunkStartX + t * tileLength + xJit, 0f, side * (sidewalkZ + zJit));
                     g.transform.rotation = Quaternion.Euler(0f, (float)(rng.NextDouble() * 360.0), 0f) * g.transform.rotation;
+                    CheapProp(g);
                 }
             }
         }
@@ -394,20 +395,21 @@ public class ProceduralStreet : MonoBehaviour
             GroundAlign(g);
         }
 
-        // Extract materials from road tile prefab
-        // [0]=Pavement (sidewalk), [1]=Border, [2]=Road-1-line (asphalt)
-        Material roadSurfaceMat = null;   // asphalt — used by ParkingLot, BusBay
-        Material pavementMat    = null;   // sidewalk tile — used by ParkingZone bay
+        Material pavementMat = null;
         if (roadTilePrefab != null)
         {
             var r = roadTilePrefab.GetComponentInChildren<Renderer>();
             if (r != null)
             {
                 var mats = r.sharedMaterials;
-                if (mats.Length > 0) pavementMat    = mats[0];
-                if (mats.Length > 2) roadSurfaceMat = mats[2];
+                if (mats.Length > 0) pavementMat = mats[0];
             }
         }
+        Material asphaltMat = MakeAsphalt();
+
+        SpawnWideCarriageway(
+            chunk.transform, chunkStartX, tileLength * tilesPerChunk, asphaltMat, pavementMat,
+            hasParkingZone ? pzSideDet : 0, 0f, hasParkingZone ? 36f : -1f);
 
         int bsBaySide = 0;
         float bsBayGapStart = -1f, bsBayGapEnd = -1f;
@@ -418,31 +420,28 @@ public class ProceduralStreet : MonoBehaviour
             int bsT = rng.Next(tilesPerChunk);
             int bsSide = rng.NextDouble() < 0.5 ? -1 : 1;
 
-            // Bus bay: ~12m wide, just enough for one bus + a bit of run-in/run-out
             float bayLen = 12f;
             float bayExtra = 3.0f;
             float bayLocalX = Mathf.Max(0f, bsT * tileLength - bayLen * 0.3f);
 
-            // Record gap so curb stripe on bus-stop side gets cut out
             bsBaySide = bsSide;
-            bsBayGapStart = Mathf.Max(0f, bayLocalX - 1f);
-            bsBayGapEnd   = bayLocalX + bayLen + 1f;
+            bsBayGapStart = bayLocalX;
+            bsBayGapEnd = bayLocalX + bayLen;
 
             var bayGo = new GameObject("BusBay_" + idx);
             bayGo.transform.SetParent(chunk.transform, false);
             bayGo.hideFlags = HideFlags.DontSave;
-            bayGo.transform.position = new Vector3(chunkStartX + bayLocalX, 0f, 0f); // Y=0, not roadY
+            bayGo.transform.position = new Vector3(chunkStartX + bayLocalX, 0f, 0f);
             var bay = bayGo.AddComponent<BusBay>();
             bay.side = bsSide;
             bay.bayLength = bayLen;
             bay.extraWidth = bayExtra;
-            bay.roadEdgeZ = 3.5f;
+            bay.roadEdgeZ = RoadEdgeZ;
             bay.roadSurfaceY = roadY;
             bay.roadSurfaceMaterial = pavementMat;
             bay.Build();
 
-            // Strip Tree* from all road tile children on bus stop side, and free-standing trees
-            var bsTreeKill = new System.Collections.Generic.List<GameObject>();
+            var bsTreeKill = new List<GameObject>();
             foreach (Transform c in chunk.transform)
             {
                 if (c.name.StartsWith("Road_1_line"))
@@ -452,17 +451,17 @@ public class ProceduralStreet : MonoBehaviour
                 }
                 else if (c.name.StartsWith("Tree"))
                 {
-                    // Free-standing tree — check it is on the bus stop side
                     if ((bsSide > 0 && c.position.z > 0) || (bsSide < 0 && c.position.z < 0))
                         bsTreeKill.Add(c.gameObject);
                 }
             }
             foreach (var kill in bsTreeKill)
-                { if (Application.isPlaying) Destroy(kill); else DestroyImmediate(kill); }
+            {
+                if (Application.isPlaying) Destroy(kill); else DestroyImmediate(kill);
+            }
 
-            // Shelter closer to road — just inside the bay
             var g = InstantiateChild(pf, chunk.transform);
-            float shelterZ = bsSide * (1.1f + 1.6f);
+            float shelterZ = bsSide * (RoadEdgeZ + 1.6f);
             g.transform.position = new Vector3(chunkStartX + bsT * tileLength, 0f, shelterZ);
             g.transform.rotation = Quaternion.Euler(0f, bsSide > 0 ? 0f : 180f, 0f) * g.transform.rotation;
             GroundAlign(g);
@@ -508,33 +507,24 @@ public class ProceduralStreet : MonoBehaviour
             {
                 for (int side = -1; side <= 1; side += 2)
                 {
-                    if (!occupied.Contains(((long)t << 4) | (side > 0 ? 1L : 0L))) continue; // only where building placed
+                    if (!occupied.Contains(((long)t << 4) | (side > 0 ? 1L : 0L))) continue;
                     if (rng.NextDouble() < 0.5f) continue;
-                    var binGo = new GameObject("TrashBin");
-                    binGo.transform.SetParent(chunk.transform, false);
-                    binGo.hideFlags = HideFlags.DontSave;
-                    // Place near the building entrance — close to sidewalk edge
+                    if (trashCanPrefab == null) continue;
+                    var binGo = InstantiateChild(trashCanPrefab, chunk.transform);
+                    binGo.name = "TrashBin";
                     float binX = chunkStartX + t * tileLength + (float)(rng.NextDouble() * 2.0);
                     float binZ = side * (sidewalkZ + 0.6f);
                     binGo.transform.position = new Vector3(binX, 0f, binZ);
-                    binGo.transform.rotation = Quaternion.Euler(0f, side > 0 ? 160f : 20f, 0f);
-                    binGo.AddComponent<IsraeliTrashBin>();
+                    binGo.transform.rotation = Quaternion.Euler(0f, side > 0 ? 160f : 20f, 0f) * binGo.transform.rotation;
+                    GroundAlign(binGo);
                 }
             }
         }
 
-        // ── Curb stripe rules ────────────────────────────────────────────────────
-        // Parallel parking:  BOTH sides gap the 36m zone.
-        //   pzSide — ParkingZone draws blue/white there instead.
-        //   opposite side — no curb at all during the parking (bare road widens).
-        // Bus bay side:      gap where bay sits — BusBay draws red/yellow at road edge.
-        //   opposite side — full red/white (no change).
-        // Parking lot side:  gap tiles 2-8 only (driveway entrance).
-        // Default:           full red/white both sides.
-        float chunkLen    = tileLength * tilesPerChunk;
-        float pzZoneLen   = 36f;  // matches ParkingZone.zoneLength
-        float lotGapStart = 4f * tileLength;   // lot placed at tile 4
-        float lotGapEnd   = 6f * tileLength;   // driveway ~7m wide, covers tiles 4-6
+        float chunkLen = tileLength * tilesPerChunk;
+        float pzZoneLen = 36f;
+        float lotGapStart = 4f * tileLength;
+        float lotGapEnd = 6f * tileLength;
 
         for (int side = -1; side <= 1; side += 2)
         {
@@ -545,107 +535,62 @@ public class ProceduralStreet : MonoBehaviour
             var stripe = curbGo.AddComponent<CurbStripe>();
             stripe.length = chunkLen;
             stripe.side = side;
-            stripe.zOffset = 3.5f;
-            stripe.stripeHeight = 0.08f;
-            stripe.stripeWidth = 0.14f;
+            stripe.zOffset = RoadEdgeZ;
+            stripe.stripeHeight = 0.16f;
+            stripe.stripeWidth = 0.22f;
+            stripe.segmentLength = 0.65f;
 
             if (hasParkingZone && side == pzSideDet)
             {
                 stripe.gapStart = 0f;
-                stripe.gapEnd   = pzZoneLen;
+                stripe.gapEnd = pzZoneLen;
             }
             else if (hasLot && side == lotSide)
             {
                 stripe.gapStart = lotGapStart;
-                stripe.gapEnd   = lotGapEnd;
+                stripe.gapEnd = lotGapEnd;
             }
 
-            // Bus bay gap always applied as gap2 so it stacks with any gap1 above
             if (bsBaySide != 0 && side == bsBaySide)
             {
-                stripe.gap2Start = bsBayGapStart;
-                stripe.gap2End   = bsBayGapEnd;
+                float seg = stripe.segmentLength;
+                stripe.altStart = Mathf.Floor(bsBayGapStart / seg) * seg;
+                stripe.altEnd = Mathf.Ceil(bsBayGapEnd / seg) * seg;
             }
 
             stripe.Build();
         }
 
-        // Supermarket every N chunks — skip if this chunk has a parking lot
-        if (supermarketEveryNChunks > 0 && idx % supermarketEveryNChunks == 0 && !hasLot)
-        {
-            int side = rng.NextDouble() < 0.5 ? -1 : 1;
-            int t = tilesPerChunk / 2;
-            var smGo = new GameObject("Supermarket_" + idx);
-            smGo.transform.SetParent(chunk.transform, false);
-            smGo.hideFlags = HideFlags.DontSave;
-            smGo.AddComponent<IsraeliSupermarket>();
-            float lotZ = side * (lotHalfWidth + 2f);
-            smGo.transform.position = new Vector3(chunkStartX + t * tileLength, 0f, lotZ);
-            smGo.transform.rotation = Quaternion.Euler(0f, side > 0 ? 180f : 0f, 0f);
-        }
+        var trashPositions = new List<Vector3>();
+        foreach (Transform c in chunk.transform)
+            if (c.name.StartsWith("TrashBin")) trashPositions.Add(c.position);
 
-        // City garden — small park every 7 chunks, alternating sides
-        if (idx % 7 == 0 && !hasLot)
+        int catsThisChunk = Mathf.Max(0, catsPerChunk);
+        for (int ci = 0; ci < catsThisChunk; ci++)
         {
-            int gSide = (idx / 7 % 2 == 0) ? 1 : -1;
-            var gardenGo = new GameObject("CityGarden_" + idx);
-            gardenGo.transform.SetParent(chunk.transform, false);
-            gardenGo.hideFlags = HideFlags.DontSave;
-            gardenGo.transform.position = new Vector3(chunkStartX + tileLength * 3f, 0f, 0f);
-            var garden = gardenGo.AddComponent<CityGarden>();
-            garden.side = gSide;
-            garden.width = 18f;
-            garden.depth = 14f;
-            garden.Build();
-        }
+            float catX, catZ;
+            int catSide = rng.NextDouble() < 0.5 ? -1 : 1;
 
-        // Cats near trash bins and buildings — auto-load Kitty_001 if not manually assigned
-#if UNITY_EDITOR
-        if (catPrefab == null)
-            catPrefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(
-                "Assets/ithappy/Animals_FREE/Prefabs/Kitty_001.prefab");
-#endif
-        if (catPrefab != null)
-        {
-            // Collect trash bin positions to place cats nearby
-            var trashPositions = new System.Collections.Generic.List<Vector3>();
-            foreach (Transform c in chunk.transform)
-                if (c.name.StartsWith("TrashBin")) trashPositions.Add(c.position);
-
-            int catsThisChunk = Mathf.Max(0, catsPerChunk);
-            for (int ci = 0; ci < catsThisChunk; ci++)
+            if (trashPositions.Count > 0 && rng.NextDouble() < 0.6f)
             {
-                if (trashPositions.Count > 0 && rng.NextDouble() < 0.6f)
-                {
-                    // Place next to a trash bin
-                    var bin = trashPositions[rng.Next(trashPositions.Count)];
-                    catX = bin.x + (float)(rng.NextDouble() * 1.5 - 0.75);
-                    catZ = bin.z + (float)(rng.NextDouble() * 0.6 - 0.3);
-                    catSide = bin.z >= 0 ? 1 : -1;
-                }
-                else
-                {
-                    // Place along building edge / inner sidewalk
-                    int catT = rng.Next(tilesPerChunk);
-                    catX = chunkStartX + catT * tileLength + (float)(rng.NextDouble() * tileLength * 0.8f);
-                    // Keep between road edge (sidewalkZ=5.5) and buildings — never on road
-                    catZ = catSide * (sidewalkZ + 0.5f + (float)(rng.NextDouble() * 2.5f));
-                }
-
-                var catGo = new GameObject("StreetCat_" + idx + "_" + ci);
-                catGo.transform.SetParent(chunk.transform, false);
-                catGo.hideFlags = HideFlags.DontSave;
-                // Face along the street
-                catGo.transform.rotation = Quaternion.Euler(0f, catSide > 0 ? 90f : -90f, 0f);
-                catGo.transform.position = new Vector3(catX, roadY, catZ);
-                var sc = catGo.AddComponent<StreetCat>();
-                sc.catPrefab     = catPrefab;
-                sc.patrolRange   = 3f + (float)(rng.NextDouble() * 4f);
-                sc.speed         = 0.5f + (float)(rng.NextDouble() * 0.4f);
-                sc.sidewalkMinZ  = sidewalkZ - 0.5f; // just inside road edge
-                sc.sidewalkMaxZ  = sidewalkZ + 3.5f; // up to building line
-                sc.Build();
+                var bin = trashPositions[rng.Next(trashPositions.Count)];
+                catX = bin.x + (float)(rng.NextDouble() * 1.5 - 0.75);
+                catZ = bin.z + (float)(rng.NextDouble() * 0.6 - 0.3);
+                catSide = bin.z >= 0 ? 1 : -1;
             }
+            else
+            {
+                int catT = rng.Next(tilesPerChunk);
+                catX = chunkStartX + catT * tileLength + (float)(rng.NextDouble() * tileLength * 0.8f);
+                // Place cats on the visible sidewalk (between curb and outer edge)
+                catZ = catSide * (RoadEdgeZ + 0.8f + (float)(rng.NextDouble() * (sidewalkZ - RoadEdgeZ - 1.2f)));
+            }
+
+            SpawnStreetCat(
+                chunk.transform,
+                new Vector3(catX, roadY, catZ),
+                catSide > 0 ? 90f : -90f,
+                rng);
         }
 
         if (pedestrianPrefabs != null && pedestrianPrefabs.Length > 0 && pedestriansPerChunk > 0)
@@ -660,28 +605,25 @@ public class ProceduralStreet : MonoBehaviour
             }
         }
 
-        // Electricity poles along both sidewalks — skip on parking zone chunks
-        if (electricityPoleEveryNTiles > 0 && !hasParkingZone)
+        if (electricityPoleEveryNTiles > 0)
         {
             float poleSpacingM = electricityPoleEveryNTiles * tileLength;
             for (int t = 0; t < tilesPerChunk; t += electricityPoleEveryNTiles)
             {
                 for (int side = -1; side <= 1; side += 2)
                 {
-                    // No skip — every pole must exist so wires connect to the next
                     var poleGo = new GameObject("ElecPole");
                     poleGo.transform.SetParent(chunk.transform, false);
                     poleGo.hideFlags = HideFlags.DontSave;
-                    // No X jitter — exact position so wires line up
                     poleGo.transform.position = new Vector3(chunkStartX + t * tileLength, 0f, side * (sidewalkZ + 2.5f));
                     var pole = poleGo.AddComponent<ElectricityPole>();
                     pole.poleSpacing = poleSpacingM;
+                    pole.Build();
                 }
             }
         }
 
-        // Street parking zone + off-street parking lot, 3 times in a 5-min drive
-        if (parkingZoneEveryNChunks > 0 && idx % parkingZoneEveryNChunks == 0)
+        if (hasParkingZone)
         {
             int pzSide = pzSideDet;
 
@@ -692,9 +634,9 @@ public class ProceduralStreet : MonoBehaviour
             var pz = pzGo.AddComponent<ParkingZone>();
             pz.zoneLength = 36f;
             pz.side = pzSide;
-            pz.curbZ = 3.5f;
+            pz.curbZ = RoadEdgeZ;
             pz.carPrefabs = parkingCarPrefabs;
-            pz.roadSurfaceMaterial = pavementMat;
+            pz.roadSurfaceMaterial = asphaltMat;
             pz.Build();
 
             var plGo = new GameObject("ParkingLot_" + idx);
@@ -703,41 +645,12 @@ public class ProceduralStreet : MonoBehaviour
             plGo.transform.position = new Vector3(chunkStartX + tileLength * 4f, 0f, 0f);
             var pl = plGo.AddComponent<ParkingLot>();
             pl.side = -pzSide;
-            pl.roadEdgeZ = 3.5f;
+            pl.roadEdgeZ = RoadEdgeZ;
             pl.rows = 2;
             pl.cols = 4;
             pl.carPrefabs = parkingCarPrefabs;
-            pl.roadSurfaceMaterial = roadSurfaceMat;
+            pl.roadSurfaceMaterial = asphaltMat;
             pl.Build();
-        }
-
-        {
-            float bdLen = tileLength * tilesPerChunk;
-            float cx = chunkStartX + bdLen * 0.5f;
-            float backdropZ = lotHalfWidth + backdropDistance;
-            Material bdMat = cityBackdropMaterial != null ? cityBackdropMaterial : MakeCityBackdrop();
-            for (int side = -1; side <= 1; side += 2)
-            {
-                for (int row = 0; row < 2; row++)
-                {
-                    float rowZ = backdropZ + row * 20f;
-                    float rowH = backdropHeight - row * 8f;
-                    float halfH = rowH * 0.5f;
-                    var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-                    quad.name = "CityBackdrop";
-                    quad.transform.SetParent(chunk.transform, false);
-                    quad.hideFlags = HideFlags.DontSave;
-                    quad.transform.position = new Vector3(cx, halfH, side * rowZ);
-                    quad.transform.rotation = Quaternion.Euler(0f, side > 0 ? 180f : 0f, 0f);
-                    quad.transform.localScale = new Vector3(bdLen, rowH, 1f);
-                    var r = quad.GetComponent<Renderer>();
-                    r.sharedMaterial = bdMat;
-                    r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                    r.receiveShadows = false;
-                    var col = quad.GetComponent<Collider>();
-                    if (col != null) { if (Application.isPlaying) Destroy(col); else DestroyImmediate(col); }
-                }
-            }
         }
 
         _spawned[idx] = chunk;
@@ -766,6 +679,7 @@ public class ProceduralStreet : MonoBehaviour
             var cp = catGo.transform.position;
             catGo.transform.position = new Vector3(cp.x, roadY, cp.z);
             CheapProp(catGo);
+            Debug.Log("Cat spawned at " + catGo.transform.position);
         }
         catch (System.Exception ex)
         {
@@ -816,29 +730,7 @@ public class ProceduralStreet : MonoBehaviour
             var legacyAnim = model.GetComponentInChildren<Animation>();
             if (legacyAnim != null) { legacyAnim.wrapMode = WrapMode.Loop; legacyAnim.Play(); }
 
-            // Random shirt colour — tints the body material per pedestrian
-            Color[] shirtColors = {
-                new Color(0.85f, 0.20f, 0.20f), // red
-                new Color(0.20f, 0.40f, 0.85f), // blue
-                new Color(0.20f, 0.65f, 0.25f), // green
-                new Color(0.90f, 0.55f, 0.10f), // orange
-                new Color(0.55f, 0.20f, 0.70f), // purple
-                new Color(0.15f, 0.15f, 0.15f), // black
-                new Color(0.95f, 0.95f, 0.95f), // white
-                new Color(0.30f, 0.55f, 0.50f), // teal
-            };
-            Color shirt = shirtColors[rng.Next(shirtColors.Length)];
-            var block = new MaterialPropertyBlock();
-            foreach (var r in model.GetComponentsInChildren<Renderer>())
-            {
-                if (r.sharedMaterial != null && r.sharedMaterial.name.ToLower().Contains("body"))
-                {
-                    r.GetPropertyBlock(block);
-                    block.SetColor("_BaseColor", shirt);
-                    block.SetColor("_Color", shirt);
-                    r.SetPropertyBlock(block);
-                }
-            }
+            ApplyPedestrianClothingColors(model, rng);
 
             var sp = go.AddComponent<StreetPedestrian>();
             sp.speed = 1.2f + (float)(rng.NextDouble() * 0.4);
@@ -856,6 +748,291 @@ public class ProceduralStreet : MonoBehaviour
         }
 
         SetHideFlagsRecursive(go.transform);
+    }
+
+    static readonly Color[] PedestrianShirtColors = {
+        new Color(0.85f, 0.20f, 0.20f), // red
+        new Color(0.20f, 0.40f, 0.85f), // blue
+        new Color(0.20f, 0.65f, 0.25f), // green
+        new Color(0.90f, 0.55f, 0.10f), // orange
+        new Color(0.55f, 0.20f, 0.70f), // purple
+        new Color(0.15f, 0.15f, 0.15f), // black
+        new Color(0.95f, 0.95f, 0.95f), // white
+        new Color(0.30f, 0.55f, 0.50f), // teal
+    };
+
+    static readonly Color[] PedestrianPantsNeutrals = {
+        new Color(0.12f, 0.12f, 0.14f), // black
+        new Color(0.12f, 0.16f, 0.28f), // navy
+        new Color(0.32f, 0.32f, 0.34f), // gray
+        new Color(0.36f, 0.24f, 0.14f), // brown
+    };
+
+    static bool PedestrianColorsSimilar(Color a, Color b)
+    {
+        float dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b;
+        return (dr * dr + dg * dg + db * db) < 0.04f;
+    }
+
+    // Face / skin / eye / hair must keep original textures (do not tint).
+    static bool IsFaceSkinEyeHairName(string key)
+    {
+        return key.Contains("face") || key.Contains("skin") || key.Contains("head")
+            || key.Contains("eye") || key.Contains("hair") || key.Contains("lash")
+            || key.Contains("brow") || key.Contains("teeth") || key.Contains("mouth")
+            || key.Contains("scalp") || key.Contains("beard");
+    }
+
+    static bool IsPantsName(string key)
+    {
+        return key.Contains("pants") || key.Contains("trouser") || key.Contains("jean");
+    }
+
+    static bool IsShirtName(string key)
+    {
+        return key.Contains("shirt") || key.Contains("top") || key.Contains("coat")
+            || key.Contains("jacket") || key.Contains("sweater") || key.Contains("hoodie")
+            || key.Contains("torso");
+    }
+
+    static void TintRendererSlot(Renderer r, int materialIndex, MaterialPropertyBlock block, Color c)
+    {
+        r.GetPropertyBlock(block, materialIndex);
+        block.SetColor("_BaseColor", c);
+        block.SetColor("_Color", c);
+        r.SetPropertyBlock(block, materialIndex);
+    }
+
+    void ApplyPedestrianClothingColors(GameObject model, System.Random rng)
+    {
+        Color shirt = PedestrianShirtColors[rng.Next(PedestrianShirtColors.Length)];
+
+        // Pants: dark neutrals or another palette color, never matching this shirt.
+        Color pants;
+        int tries = 0;
+        do
+        {
+            if (rng.NextDouble() < 0.65)
+                pants = PedestrianPantsNeutrals[rng.Next(PedestrianPantsNeutrals.Length)];
+            else
+                pants = PedestrianShirtColors[rng.Next(PedestrianShirtColors.Length)];
+            tries++;
+        } while (PedestrianColorsSimilar(shirt, pants) && tries < 24);
+        if (PedestrianColorsSimilar(shirt, pants))
+            pants = PedestrianColorsSimilar(shirt, PedestrianPantsNeutrals[1])
+                ? PedestrianPantsNeutrals[2]
+                : PedestrianPantsNeutrals[1];
+
+        bool hasDedicatedPants = false;
+        bool hasDedicatedShirt = false;
+        foreach (var r in model.GetComponentsInChildren<Renderer>(true))
+        {
+            string goKey = r.gameObject.name.ToLowerInvariant();
+            if (IsPantsName(goKey)) hasDedicatedPants = true;
+            if (IsShirtName(goKey)) hasDedicatedShirt = true;
+            foreach (var m in r.sharedMaterials)
+            {
+                if (m == null) continue;
+                string mk = m.name.ToLowerInvariant();
+                if (IsPantsName(mk)) hasDedicatedPants = true;
+                if (IsShirtName(mk)) hasDedicatedShirt = true;
+            }
+        }
+
+        var block = new MaterialPropertyBlock();
+        foreach (var r in model.GetComponentsInChildren<Renderer>(true))
+        {
+            var mats = r.sharedMaterials;
+            for (int mi = 0; mi < mats.Length; mi++)
+            {
+                var mat = mats[mi];
+                if (mat == null) continue;
+                string key = (mat.name + " " + r.gameObject.name).ToLowerInvariant();
+                if (IsFaceSkinEyeHairName(key)) continue;
+
+                if (IsPantsName(key))
+                {
+                    TintRendererSlot(r, mi, block, pants);
+                    continue;
+                }
+                if (IsShirtName(key))
+                {
+                    TintRendererSlot(r, mi, block, shirt);
+                    continue;
+                }
+
+                // Combined body atlas (e.g. Ch12_body): split face / shirt / pants by bone weights.
+                // Never tint the whole body material — that paints over the face.
+                if (key.Contains("body") && !hasDedicatedPants && !hasDedicatedShirt
+                    && r is SkinnedMeshRenderer smr)
+                {
+                    TrySplitCombinedBodyClothing(smr, shirt, pants);
+                    continue;
+                }
+                // Dedicated body/skin mesh alongside separate shirt/pants (e.g. Ch41_Body): leave untinted.
+            }
+        }
+    }
+
+    static void AccumulateBoneClassWeight(int[] boneClass, int boneIndex, float weight,
+        ref float faceW, ref float pantsW, ref float shirtW)
+    {
+        if (weight <= 0f || boneClass == null || boneClass.Length == 0) return;
+        int cls = boneClass[Mathf.Clamp(boneIndex, 0, boneClass.Length - 1)];
+        if (cls == 2) faceW += weight;
+        else if (cls == 1) pantsW += weight;
+        else shirtW += weight;
+    }
+
+    // Splits a combined body material into untinted face/skin + tinted shirt + tinted pants.
+    // Returns false if the mesh cannot be read.
+    static bool TrySplitCombinedBodyClothing(SkinnedMeshRenderer smr, Color shirt, Color pants)
+    {
+        var src = smr.sharedMesh;
+        if (src == null || !src.isReadable) return false;
+        if (smr.bones == null || smr.bones.Length == 0) return false;
+
+        var bones = smr.bones;
+        var boneClass = new int[bones.Length]; // 0 shirt, 1 pants, 2 face/skin
+        for (int i = 0; i < bones.Length; i++)
+        {
+            if (bones[i] == null) { boneClass[i] = 0; continue; }
+            string bn = bones[i].name.ToLowerInvariant();
+            if (bn.Contains("head") || bn.Contains("neck") || bn.Contains("eye")
+                || bn.Contains("jaw") || bn.Contains("face") || bn.Contains("brow")
+                || bn.Contains("cheek") || bn.Contains("nose") || bn.Contains("mouth")
+                || bn.Contains("teeth") || bn.Contains("tongue") || bn.Contains("lip"))
+                boneClass[i] = 2;
+            else if (bn.Contains("upleg") || bn.Contains("leg") || bn.Contains("foot")
+                     || bn.Contains("toe") || bn.EndsWith("hips") || bn.Contains(":hips")
+                     || bn.Contains("hip") || bn.Contains("butt"))
+                boneClass[i] = 1;
+            else
+                boneClass[i] = 0;
+        }
+
+        var weights = src.boneWeights;
+        if (weights == null || weights.Length != src.vertexCount) return false;
+
+        // Classify by summed bone weights. Any meaningful head/neck influence keeps the
+        // face texture — otherwise spine-weighted cheek/forehead verts get the shirt tint.
+        var vertClass = new int[src.vertexCount];
+        for (int v = 0; v < src.vertexCount; v++)
+        {
+            var w = weights[v];
+            float faceW = 0f, pantsW = 0f, shirtW = 0f;
+            AccumulateBoneClassWeight(boneClass, w.boneIndex0, w.weight0, ref faceW, ref pantsW, ref shirtW);
+            AccumulateBoneClassWeight(boneClass, w.boneIndex1, w.weight1, ref faceW, ref pantsW, ref shirtW);
+            AccumulateBoneClassWeight(boneClass, w.boneIndex2, w.weight2, ref faceW, ref pantsW, ref shirtW);
+            AccumulateBoneClassWeight(boneClass, w.boneIndex3, w.weight3, ref faceW, ref pantsW, ref shirtW);
+
+            if (faceW >= 0.05f) vertClass[v] = 2;
+            else if (pantsW >= shirtW && pantsW > 0f) vertClass[v] = 1;
+            else vertClass[v] = 0;
+        }
+
+        // Bind-pose height: top of the mesh is head/neck — keep those on the face material
+        // even when spine bones out-weight the head bone.
+        var bindVerts = src.vertices;
+        if (bindVerts != null && bindVerts.Length == vertClass.Length)
+        {
+            float minY = float.PositiveInfinity, maxY = float.NegativeInfinity;
+            for (int v = 0; v < bindVerts.Length; v++)
+            {
+                float y = bindVerts[v].y;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+            float headCut = Mathf.Lerp(minY, maxY, 0.68f);
+            for (int v = 0; v < vertClass.Length; v++)
+            {
+                if (bindVerts[v].y >= headCut) vertClass[v] = 2;
+            }
+        }
+
+        var oldMats = smr.sharedMaterials;
+        int bodySub = -1;
+        Material srcMat = null;
+        for (int i = 0; i < oldMats.Length; i++)
+        {
+            if (oldMats[i] == null) continue;
+            if (oldMats[i].name.ToLowerInvariant().Contains("body"))
+            {
+                bodySub = i;
+                srcMat = oldMats[i];
+                break;
+            }
+        }
+        if (bodySub < 0)
+        {
+            bodySub = 0;
+            srcMat = oldMats.Length > 0 ? oldMats[0] : null;
+        }
+        if (srcMat == null) return false;
+        bodySub = Mathf.Clamp(bodySub, 0, src.subMeshCount - 1);
+
+        var faceMat = new Material(srcMat) { name = srcMat.name + "_Face" };
+        var shirtMat = new Material(srcMat) { name = srcMat.name + "_Shirt" };
+        var pantsMat = new Material(srcMat) { name = srcMat.name + "_Pants" };
+        // Keep face/skin albedo unmultiplied so Mixamo facial features stay visible.
+        if (faceMat.HasProperty("_BaseColor")) faceMat.SetColor("_BaseColor", Color.white);
+        if (faceMat.HasProperty("_Color")) faceMat.SetColor("_Color", Color.white);
+        if (shirtMat.HasProperty("_BaseColor")) shirtMat.SetColor("_BaseColor", shirt);
+        if (shirtMat.HasProperty("_Color")) shirtMat.SetColor("_Color", shirt);
+        if (pantsMat.HasProperty("_BaseColor")) pantsMat.SetColor("_BaseColor", pants);
+        if (pantsMat.HasProperty("_Color")) pantsMat.SetColor("_Color", pants);
+
+        var faceTris = new List<int>();
+        var shirtTris = new List<int>();
+        var pantsTris = new List<int>();
+        var bodyTris = src.GetTriangles(bodySub);
+        for (int t = 0; t < bodyTris.Length; t += 3)
+        {
+            int a = bodyTris[t], b = bodyTris[t + 1], c = bodyTris[t + 2];
+            int ca = vertClass[a], cb = vertClass[b], cc = vertClass[c];
+            int vote;
+            if (ca == cb || ca == cc) vote = ca;
+            else if (cb == cc) vote = cb;
+            else if (ca == 2 || cb == 2 || cc == 2) vote = 2;
+            else if (ca == 1 || cb == 1 || cc == 1) vote = 1;
+            else vote = 0;
+
+            if (vote == 2) { faceTris.Add(a); faceTris.Add(b); faceTris.Add(c); }
+            else if (vote == 1) { pantsTris.Add(a); pantsTris.Add(b); pantsTris.Add(c); }
+            else { shirtTris.Add(a); shirtTris.Add(b); shirtTris.Add(c); }
+        }
+
+        var newMats = new List<Material>();
+        var orderedTris = new List<List<int>>();
+        for (int i = 0; i < oldMats.Length; i++)
+        {
+            var m = oldMats[i];
+            if (m == null) continue;
+            if (i == bodySub)
+            {
+                if (faceTris.Count > 0) { newMats.Add(faceMat); orderedTris.Add(faceTris); }
+                if (shirtTris.Count > 0) { newMats.Add(shirtMat); orderedTris.Add(shirtTris); }
+                if (pantsTris.Count > 0) { newMats.Add(pantsMat); orderedTris.Add(pantsTris); }
+            }
+            else
+            {
+                int srcSub = Mathf.Min(i, src.subMeshCount - 1);
+                newMats.Add(m);
+                orderedTris.Add(new List<int>(src.GetTriangles(srcSub)));
+            }
+        }
+
+        if (orderedTris.Count == 0) return false;
+
+        var mesh = Object.Instantiate(src);
+        mesh.name = src.name + "_Clothed";
+        mesh.subMeshCount = orderedTris.Count;
+        for (int i = 0; i < orderedTris.Count; i++)
+            mesh.SetTriangles(orderedTris[i], i, true);
+
+        smr.sharedMesh = mesh;
+        smr.sharedMaterials = newMats.ToArray();
+        return true;
     }
 
     void StripBakedStreetFurniture(GameObject road)
@@ -884,22 +1061,6 @@ public class ProceduralStreet : MonoBehaviour
         {
             if (Application.isPlaying) Destroy(go); else DestroyImmediate(go);
         }
-    }
-
-    static Material _cityBackdrop;
-    static Material MakeCityBackdrop()
-    {
-        if (_cityBackdrop == null)
-        {
-            var sh = Shader.Find("Universal Render Pipeline/Lit");
-            if (sh == null) sh = Shader.Find("Standard");
-            _cityBackdrop = new Material(sh);
-            _cityBackdrop.color = new Color(0.72f, 0.70f, 0.66f);
-            if (_cityBackdrop.HasProperty("_Smoothness")) _cityBackdrop.SetFloat("_Smoothness", 0f);
-            if (_cityBackdrop.HasProperty("_Glossiness")) _cityBackdrop.SetFloat("_Glossiness", 0f);
-            _cityBackdrop.hideFlags = HideFlags.HideAndDontSave;
-        }
-        return _cityBackdrop;
     }
 
     static Material _asphalt;
@@ -962,18 +1123,243 @@ public class ProceduralStreet : MonoBehaviour
     void SpawnSidewalk(Transform parent, Material walkMat, float startX, float length, float y,
         float walkZ, float walk, int side, int skipWalkSide, float skipStart, float skipEnd)
     {
-        // Some prefabs are saved with a baked Y offset — zero it out first
-        var p = go.transform.position;
-        go.transform.position = new Vector3(p.x, 0f, p.z);
+        if (skipWalkSide == side && skipEnd > skipStart)
+        {
+            float a0 = startX;
+            float a1 = startX + skipStart;
+            float b0 = startX + skipEnd;
+            float b1 = startX + length;
+            if (a1 - a0 > 0.5f)
+                Slab(parent, walkMat, new Vector3((a0 + a1) * 0.5f, y - 0.005f, walkZ), new Vector3(a1 - a0, 0.03f, walk));
+            if (b1 - b0 > 0.5f)
+                Slab(parent, walkMat, new Vector3((b0 + b1) * 0.5f, y - 0.005f, walkZ), new Vector3(b1 - b0, 0.03f, walk));
+            return;
+        }
+        float cx = startX + length * 0.5f;
+        Slab(parent, walkMat, new Vector3(cx, y - 0.005f, walkZ), new Vector3(length, 0.03f, walk));
+    }
 
-        // Use only MeshRenderers — skips particle systems / LOD helpers that bloat bounds
+    static Material Tiled(Material src, float worldX, float worldZ, float tileX, float tileZ)
+    {
+        var m = new Material(src);
+        m.mainTextureScale = new Vector2(worldX / tileX, worldZ / tileZ);
+        return m;
+    }
+
+    void Slab(Transform parent, Material mat, Vector3 worldPos, Vector3 size)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        go.name = "Carriageway";
+        go.transform.SetParent(parent, false);
+        go.transform.position = worldPos;
+        go.transform.localScale = size;
+        var rend = go.GetComponent<Renderer>();
+        if (mat != null) rend.sharedMaterial = mat;
+        go.hideFlags = HideFlags.DontSave;
+        var col = go.GetComponent<Collider>();
+        if (col)
+        {
+            if (Application.isPlaying) Destroy(col);
+            else DestroyImmediate(col);
+        }
+    }
+
+    void StickWallPosters(List<KeyValuePair<GameObject, int>> placed, Transform chunk, int idx, System.Random rng)
+    {
+        if (billboardAds == null || placed == null || placed.Count == 0) return;
+        int adCount = 0;
+        for (int i = 0; i < billboardAds.Length; i++)
+            if (billboardAds[i] != null) adCount++;
+        if (adCount == 0) return;
+
+        int slot = ((idx % adCount) + adCount) % adCount;
+        Texture tex = null;
+        int seen = 0;
+        for (int i = 0; i < billboardAds.Length; i++)
+        {
+            if (billboardAds[i] == null) continue;
+            if (seen == slot)
+            {
+                tex = billboardAds[i];
+                break;
+            }
+            seen++;
+        }
+        if (tex == null) return;
+
+        float xBias = (float)(rng.NextDouble() * 2.0 - 1.0);
+        int start = rng.Next(placed.Count);
+        for (int a = 0; a < placed.Count && a < 8; a++)
+        {
+            var pick = placed[(start + a) % placed.Count];
+            if (AttachWallPoster(pick.Key, pick.Value, tex, xBias))
+                return;
+        }
+    }
+
+    bool AttachWallPoster(GameObject building, int streetSide, Texture tex, float xBias)
+    {
+        if (building == null || tex == null) return false;
+        if (streetSide == 0) streetSide = building.transform.position.z >= 0f ? 1 : -1;
+
+        var rends = building.GetComponentsInChildren<MeshRenderer>();
+        if (rends.Length == 0) return false;
+        Bounds wb = rends[0].bounds;
+        for (int i = 1; i < rends.Length; i++)
+        {
+            if (rends[i] != null && rends[i].enabled)
+                wb.Encapsulate(rends[i].bounds);
+        }
+
+        if (wb.size.x < 3.5f || wb.size.y < 4.0f) return false;
+
+        // +Z lots face the road in -Z; -Z lots face +Z.
+        Vector3 towardStreet = new Vector3(0f, 0f, -streetSide);
+        float streetFaceZ = streetSide > 0 ? wb.min.z : wb.max.z;
+        float coreZ = wb.center.z;
+
+        // Plants/stairs puff the AABB toward the sidewalk. Pull the poster
+        // into the building mass, then sit it just in front of that plane.
+        float wallZ = Mathf.Lerp(streetFaceZ, coreZ, 0.62f);
+        float minLotZ = streetSide * (sidewalkZ + 3.0f);
+        if (streetSide > 0) wallZ = Mathf.Max(wallZ, minLotZ);
+        else wallZ = Mathf.Min(wallZ, minLotZ);
+
+        // The placed pivot is on the lot. Don't let a puffed AABB pull the
+        // poster out onto the sidewalk in front of the actual wall.
+        float pivotZ = building.transform.position.z;
+        if (Mathf.Abs(wallZ - pivotZ) > 3.5f)
+            wallZ = pivotZ + towardStreet.z * 1.1f;
+
+        float posterH = 2.1f;
+        float posterW = posterH * 0.72f;
+        posterW = Mathf.Min(posterW, wb.size.x * 0.38f);
+        posterH = posterW / 0.72f;
+
+        float x = wb.center.x + xBias * wb.size.x * 0.12f;
+        float halfW = posterW * 0.5f + 0.35f;
+        x = Mathf.Clamp(x, wb.min.x + halfW, wb.max.x - halfW);
+
+        float y = 2.15f + posterH * 0.5f;
+        y = Mathf.Clamp(y, 1.8f, Mathf.Min(4.2f, wb.max.y - posterH * 0.5f - 0.4f));
+
+        Vector3 pos = new Vector3(x, y, wallZ) + towardStreet * 0.06f;
+
+        if (Mathf.Abs(pos.z) < sidewalkZ + 2.4f) return false;
+        if (Mathf.Abs(pos.z - coreZ) > wb.extents.z * 0.9f) return false;
+
+        var shader = Shader.Find("IsraeliStreet/BillboardPoster");
+        if (shader == null) shader = Shader.Find("Unlit/Texture");
+        var mat = new Material(shader);
+        mat.hideFlags = HideFlags.DontSave;
+        mat.mainTexture = tex;
+        if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
+        if (mat.HasProperty("_Color")) mat.SetColor("_Color", Color.white);
+
+        var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        quad.name = "WallPoster_" + tex.name;
+        quad.transform.SetParent(building.transform, true);
+        quad.transform.position = pos;
+        quad.transform.rotation = Quaternion.LookRotation(towardStreet, Vector3.up);
+        Vector3 lossy = building.transform.lossyScale;
+        float sx = Mathf.Abs(lossy.x) > 0.001f ? posterW / Mathf.Abs(lossy.x) : posterW;
+        float sy = Mathf.Abs(lossy.y) > 0.001f ? posterH / Mathf.Abs(lossy.y) : posterH;
+        quad.transform.localScale = new Vector3(sx, sy, 1f);
+
+        var col = quad.GetComponent<Collider>();
+        if (col != null)
+        {
+            if (Application.isPlaying) Destroy(col);
+            else DestroyImmediate(col);
+        }
+
+        var r = quad.GetComponent<Renderer>();
+        r.sharedMaterial = mat;
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        r.receiveShadows = false;
+        return true;
+    }
+
+    static bool TryGetRendererBounds(GameObject go, out Bounds bounds)
+    {
+        bounds = default;
+        if (go == null) return false;
+        var rends = go.GetComponentsInChildren<Renderer>();
+        if (rends == null || rends.Length == 0) return false;
+        bool any = false;
+        for (int i = 0; i < rends.Length; i++)
+        {
+            if (rends[i] == null || !rends[i].enabled) continue;
+            if (!any) { bounds = rends[i].bounds; any = true; }
+            else bounds.Encapsulate(rends[i].bounds);
+        }
+        return any;
+    }
+
+    static bool OverlapsGasFootprint(GameObject go, Bounds gasFootprint)
+    {
+        if (!TryGetRendererBounds(go, out var b)) return false;
+        // XZ only — height doesn't matter for lot clearance.
+        return b.min.x < gasFootprint.max.x && b.max.x > gasFootprint.min.x
+            && b.min.z < gasFootprint.max.z && b.max.z > gasFootprint.min.z;
+    }
+
+    void SpawnGasLotPad(Transform parent, Bounds footprint)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        go.name = "GasLotPad";
+        go.transform.SetParent(parent, false);
+        float h = 0.08f;
+        var c = footprint.center;
+        go.transform.position = new Vector3(c.x, h * 0.5f, c.z);
+        go.transform.localScale = new Vector3(footprint.size.x + 1.5f, h, footprint.size.z + 1.5f);
+        var mat = new Material(Shader.Find("Standard"));
+        mat.color = new Color(0.62f, 0.60f, 0.56f);
+        mat.SetFloat("_Glossiness", 0.08f);
+        go.GetComponent<Renderer>().sharedMaterial = mat;
+        var col = go.GetComponent<Collider>();
+        if (col != null)
+        {
+            if (Application.isPlaying) Destroy(col);
+            else DestroyImmediate(col);
+        }
+        go.hideFlags = HideFlags.DontSave;
+    }
+
+    void NudgeOffGasFootprint(GameObject go, int side, Bounds gasFootprint)
+    {
+        if (go == null || side == 0) return;
+        for (int i = 0; i < 6; i++)
+        {
+            if (!OverlapsGasFootprint(go, gasFootprint)) return;
+            var p = go.transform.position;
+            p.z += side * 4f;
+            go.transform.position = p;
+            GroundAlign(go);
+        }
+        if (OverlapsGasFootprint(go, gasFootprint))
+            DestroySpawned(go);
+    }
+
+    void DestroySpawned(GameObject go)
+    {
+        if (go == null) return;
+        if (Application.isPlaying) Destroy(go);
+        else DestroyImmediate(go);
+    }
+
+    void GroundAlign(GameObject go)
+    {
         var rends = go.GetComponentsInChildren<MeshRenderer>();
         if (rends.Length == 0) return;
         var b = rends[0].bounds;
         for (int i = 1; i < rends.Length; i++) b.Encapsulate(rends[i].bounds);
         float minY = b.min.y;
-        p = go.transform.position;
-        go.transform.position = new Vector3(p.x, -minY + targetY, p.z);
+        float extra = 0f;
+        var facing = go.GetComponent<BuildingFacing>();
+        if (facing != null) extra = facing.groundOffset;
+        var p = go.transform.position;
+        go.transform.position = new Vector3(p.x, p.y - minY + extra, p.z);
     }
 
     void KeepOffRoad(GameObject go, int side)
@@ -1007,11 +1393,38 @@ public class ProceduralStreet : MonoBehaviour
         {
             go = Instantiate(prefab, parent);
         }
-        // Zero out any baked Y offset the prefab may have been saved with
-        var p = go.transform.position;
-        go.transform.position = new Vector3(p.x, 0f, p.z);
         SetHideFlagsRecursive(go.transform);
         return go;
+    }
+
+    // Million-vert Meshy facades don't need to receive shadows (casting is enough).
+    static void CheapBuilding(GameObject go)
+    {
+        if (go == null) return;
+        var rends = go.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < rends.Length; i++)
+        {
+            var r = rends[i];
+            if (r == null) continue;
+            r.receiveShadows = false;
+            var s = r.bounds.size;
+            var mat = r.sharedMaterial;
+            bool blank = mat == null || mat.mainTexture == null;
+            // Sketchfab towers ship with a huge untextured ground plane that reads as a grey box.
+            if (blank && s.y < 1.2f && (s.x > 18f || s.z > 18f))
+                r.enabled = false;
+        }
+    }
+
+    static void CheapProp(GameObject go)
+    {
+        if (go == null) return;
+        var rends = go.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < rends.Length; i++)
+        {
+            rends[i].shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            rends[i].receiveShadows = false;
+        }
     }
 
     void SetHideFlagsRecursive(Transform t)

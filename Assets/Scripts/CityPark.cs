@@ -14,40 +14,30 @@ public class CityPark : MonoBehaviour
 
     public void Build()
     {
-        float grassY  = 0.005f;
-        float pathY   = 0.012f;
+        float grassY  = 0.04f;
+        float pathY   = 0.055f;
         float parkCentreZ = sidewalkEdgeZ + depth * 0.5f;
 
-        // Grass base
-        var grassMat = Mat(new Color(0.25f, 0.52f, 0.18f));
+        var grassMat = Mat(new Color(0.28f, 0.55f, 0.18f));
         Block(grassMat,
             new Vector3(width * 0.5f, grassY * 0.5f, side * parkCentreZ),
             new Vector3(width, grassY, depth));
 
-        // Central path (longitudinal)
         var pathMat = Mat(new Color(0.72f, 0.68f, 0.60f));
         Block(pathMat,
             new Vector3(width * 0.5f, pathY * 0.5f, side * parkCentreZ),
             new Vector3(width, pathY, 1.4f));
-
-        // Cross path (transverse, centre of park)
         Block(pathMat,
             new Vector3(width * 0.5f, pathY * 0.5f, side * parkCentreZ),
             new Vector3(1.4f, pathY, depth));
 
-        // Low fence around perimeter
         var fenceMat = Mat(new Color(0.55f, 0.52f, 0.48f));
         float fH = 0.55f, fT = 0.08f;
-        // front (road side)
         Block(fenceMat, new Vector3(width * 0.5f, fH * 0.5f, side * sidewalkEdgeZ), new Vector3(width, fH, fT));
-        // far side
         Block(fenceMat, new Vector3(width * 0.5f, fH * 0.5f, side * (sidewalkEdgeZ + depth)), new Vector3(width, fH, fT));
-        // left end
         Block(fenceMat, new Vector3(0f, fH * 0.5f, side * parkCentreZ), new Vector3(fT, fH, depth));
-        // right end
         Block(fenceMat, new Vector3(width, fH * 0.5f, side * parkCentreZ), new Vector3(fT, fH, depth));
 
-        // Trees: 2 rows of 3, in quadrants
         float[] treeXs = { width * 0.18f, width * 0.5f, width * 0.82f };
         float[] treeZs = { sidewalkEdgeZ + depth * 0.25f, sidewalkEdgeZ + depth * 0.75f };
         int tIdx = 0;
@@ -85,18 +75,18 @@ public class CityPark : MonoBehaviour
 #endif
             go = Instantiate(pf, transform);
         if (go == null) return;
-        go.transform.position = worldPos;
-        go.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+        go.transform.localPosition = worldPos;
+        // Keep the prefab's authored tilt (banyan/ficus is Z-up) and only add yaw.
+        go.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * pf.transform.rotation;
         go.hideFlags = HideFlags.DontSave;
 
-        // Sit on grass surface (grassY = 0.005)
         var rends = go.GetComponentsInChildren<MeshRenderer>();
         if (rends.Length > 0)
         {
             var b = rends[0].bounds;
             for (int i = 1; i < rends.Length; i++) b.Encapsulate(rends[i].bounds);
             var p = go.transform.position;
-            go.transform.position = new Vector3(p.x, p.y - b.min.y + 0.005f, p.z);
+            go.transform.position = new Vector3(p.x, p.y - b.min.y + 0.04f, p.z);
         }
     }
 
@@ -104,9 +94,9 @@ public class CityPark : MonoBehaviour
     {
         var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
         go.transform.SetParent(transform, false);
-        go.transform.position = worldPos;
+        go.transform.localPosition = worldPos;
         go.transform.localScale = sz;
-        go.GetComponent<Renderer>().material = mat;
+        go.GetComponent<Renderer>().sharedMaterial = mat;
         go.hideFlags = HideFlags.DontSave;
         var c = go.GetComponent<Collider>();
         if (c) { if (Application.isPlaying) Destroy(c); else DestroyImmediate(c); }

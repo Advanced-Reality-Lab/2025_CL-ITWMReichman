@@ -13,12 +13,23 @@ public class SimpleDriver : MonoBehaviour
     [Tooltip("X position to teleport back to when the loop resets.")]
     public float loopStartX = 0f;
 
+    [Tooltip("World Z of the driving lane. Negative Z is the right lane when facing +X.")]
+    public float laneZ = -ProceduralStreet.RoadEdgeZ * 0.5f;
+
+    [Tooltip("Keep auto-drive in the lane (ignore stray Z drift).")]
+    public bool lockToLane = true;
+
     private CharacterController _cc;
     private float _elapsed;
 
     void Awake()
     {
         _cc = GetComponent<CharacterController>();
+    }
+
+    void Start()
+    {
+        SnapToLane();
     }
 
     void Update()
@@ -43,6 +54,9 @@ public class SimpleDriver : MonoBehaviour
         else
             transform.position += delta;
 
+        if (autoDrive && lockToLane)
+            SnapToLane(keepX: true);
+
         // Loop back after driveDurationSeconds without teleporting — just reset position
         if (autoDrive && driveDurationSeconds > 0f)
         {
@@ -51,10 +65,25 @@ public class SimpleDriver : MonoBehaviour
             {
                 _elapsed = 0f;
                 var p = transform.position;
-                if (_cc != null) _cc.enabled = false;
-                transform.position = new Vector3(loopStartX, p.y, p.z);
-                if (_cc != null) _cc.enabled = true;
+                SetPosition(new Vector3(loopStartX, p.y, lockToLane ? laneZ : p.z));
             }
         }
+    }
+
+    void SnapToLane(bool keepX = true)
+    {
+        var p = transform.position;
+        float x = keepX ? p.x : loopStartX;
+        if (Mathf.Abs(p.z - laneZ) < 0.001f && Mathf.Abs(p.x - x) < 0.001f)
+            return;
+        SetPosition(new Vector3(x, p.y, laneZ));
+    }
+
+    void SetPosition(Vector3 pos)
+    {
+        bool ccOn = _cc != null && _cc.enabled;
+        if (ccOn) _cc.enabled = false;
+        transform.position = pos;
+        if (ccOn) _cc.enabled = true;
     }
 }

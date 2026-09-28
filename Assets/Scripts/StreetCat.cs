@@ -35,25 +35,17 @@ public class StreetCat : MonoBehaviour
 
         if (go == null) return;
         go.transform.localPosition = Vector3.zero;
-        go.transform.localScale    = Vector3.one * 0.6f;
+        go.transform.localRotation = Quaternion.identity;
+        go.transform.localScale = Vector3.one;
         go.hideFlags = HideFlags.DontSave;
 
-        // Force solid black — the Kitty prefab material has alpha=0 by default
-        foreach (var r in go.GetComponentsInChildren<Renderer>())
+        var rends = go.GetComponentsInChildren<Renderer>();
+        if (rends.Length > 0)
         {
-            foreach (var m in r.materials)
-            {
-                if (m == null) continue;
-                m.color = new Color(0.05f, 0.05f, 0.05f, 1f);
-                m.SetFloat("_Mode", 0f);
-                m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
-                m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
-                m.SetInt("_ZWrite", 1);
-                m.DisableKeyword("_ALPHATEST_ON");
-                m.DisableKeyword("_ALPHABLEND_ON");
-                m.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-                m.renderQueue = -1;
-            }
+            var b = rends[0].bounds;
+            for (int i = 1; i < rends.Length; i++) b.Encapsulate(rends[i].bounds);
+            var p = go.transform.position;
+            go.transform.position = new Vector3(p.x, p.y - b.min.y, p.z);
         }
 
         _anim = go.GetComponentInChildren<Animator>();
@@ -71,9 +63,8 @@ public class StreetCat : MonoBehaviour
 
     void Update()
     {
-        if (!Application.isPlaying || !_built || _anim == null) return;
+        if (!Application.isPlaying || !_built) return;
 
-        // Move along X (street direction)
         transform.position += transform.forward * speed * Time.deltaTime;
 
         float dist = transform.position.x - _origin.x;
@@ -83,14 +74,12 @@ public class StreetCat : MonoBehaviour
             transform.Rotate(0f, 180f, 0f);
         }
 
-        // Keep on sidewalk — clamp Z away from road
         var p = transform.position;
         int side = p.z >= 0 ? 1 : -1;
         float absZ = Mathf.Abs(p.z);
         absZ = Mathf.Clamp(absZ, sidewalkMinZ, sidewalkMaxZ);
         transform.position = new Vector3(p.x, p.y, side * absZ);
 
-        // Drive walk animation via Vert parameter
-        _anim.SetFloat("Vert", 1f);
+        if (_anim != null) _anim.SetFloat("Vert", 1f);
     }
 }

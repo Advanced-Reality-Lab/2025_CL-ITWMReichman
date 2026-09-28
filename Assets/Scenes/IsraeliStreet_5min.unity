@@ -4834,7 +4834,7 @@ Transform:
   m_GameObject: {fileID: 547384757}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: 0, y: 1.7, z: 0}
+  m_LocalPosition: {x: 5, y: 1.2, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -5037,11 +5037,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 11642a1fcab174ed9916b6d07495a017, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  forwardSpeed: 5
+  forwardSpeed: 12
   autoDrive: 1
   turnRate: 40
   driveDurationSeconds: 300
   loopStartX: 0
+  laneZ: -1.8
+  lockToLane: 1
 --- !u!1 &553328841
 GameObject:
   m_ObjectHideFlags: 0
@@ -14593,25 +14595,35 @@ MonoBehaviour:
   - {fileID: 3114957575949065144, guid: 1da1bdabfc1fe4cb78a6e21c43d9d100, type: 3}
   gasStationPrefabs:
   - {fileID: 3990459390172133456, guid: b584be1c9c52e45f0aadbf8aa9897c8f, type: 3}
-  trashCanPrefab: {fileID: 5390452360692660160, guid: 5621aa4915c640b4da9c0a273c74e932, type: 3}
-  supermarketEveryNChunks: 8
-  catsPerChunk: 2
+  trashCanPrefab: {fileID: 0}
+  supermarketEveryNChunks: 5
+  catsPerChunk: 1
   electricityPoleEveryNTiles: 5
-  parkingZoneEveryNChunks: 8
+  parkingZoneEveryNChunks: 3
   parkingCarPrefabs: []
   tileLength: 10
   tilesPerChunk: 10
-  chunksAhead: 15
+  chunksAhead: 5
   chunksBehind: 1
-  lotHalfWidth: 16.5
-  sidewalkZ: 6.2
+  lotHalfWidth: 14
+  sidewalkZ: 5.5
   roadY: 0.15
   lotMargin: 1.5
   playgroundEveryNChunks: 4
   gasStationEveryNChunks: 6
-  seedOffset: 1337
+  parkEveryNChunks: 3
+  catPrefab: {fileID: 2398738074492203840, guid: a8ee473beedea4ceeb77fdef0833fe9a, type: 3}
+  pedestrianPrefabs:
+  - {fileID: 919132149155446097, guid: 326821acacfe84a26afc2307052919e2, type: 3}
+  - {fileID: 919132149155446097, guid: 5ab5694521739404b990a27180a3e085, type: 3}
+  pedestriansPerChunk: 3
+  billboardPrefab: {fileID: 0}
+  billboardAds: []
+  billboardEveryNChunks: 2
+  billboardsPerChunk: 1
+  seedOffset: 42
   showEditorPreview: 1
-  blockCount: 3
+  driveLength: 9
   chunksPerBlock: 5
 --- !u!4 &1906125916
 Transform:

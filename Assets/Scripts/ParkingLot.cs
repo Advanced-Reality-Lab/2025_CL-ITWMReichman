@@ -5,7 +5,7 @@ using UnityEngine;
 public class ParkingLot : MonoBehaviour
 {
     public int side = 1;           // which side of the street (+1 right, -1 left)
-    public float roadEdgeZ = 1.1f; // kerb Z
+    public float roadEdgeZ = 3.6f; // kerb Z
     public int rows = 3;           // rows of cars deep (away from road)
     public int cols = 5;           // cars per row
     public GameObject[] carPrefabs;
@@ -49,13 +49,6 @@ public class ParkingLot : MonoBehaviour
         Block(curbMat, new Vector3(lotW,   kH * 0.5f, side * (lotStartZ + (lotD - 3.5f) * 0.5f)), new Vector3(kT, kH, lotD - 3.5f));
         Block(curbMat, new Vector3(lotW * 0.5f, kH * 0.5f, side * (roadEdgeZ + lotD)), new Vector3(lotW, kH, kT));
 
-        // Entry posts — two small bollards either side of entrance
-        float postX1 = lotW * 0.5f - driveW * 0.5f - 0.3f;
-        float postX2 = lotW * 0.5f + driveW * 0.5f + 0.3f;
-        float postZ  = side * (roadEdgeZ + 0.3f);
-        Block(curbMat, new Vector3(postX1, 0.5f, postZ), new Vector3(0.25f, 1.0f, 0.25f));
-        Block(curbMat, new Vector3(postX2, 0.5f, postZ), new Vector3(0.25f, 1.0f, 0.25f));
-
         // Parking bay divider lines
         float carRowStart = lotStartZ + 0.5f;
         for (int c = 0; c <= cols; c++)
@@ -81,13 +74,8 @@ public class ParkingLot : MonoBehaviour
                 int ci = (r * cols + c) % bodyColors.Length;
                 if (carPrefabs != null && carPrefabs.Length > 0)
                     SpawnPrefabCar(new Vector3(cx, 0f, cz), r * cols + c, bodyColors[ci]);
-                else
-                    SpawnProceduralCar(new Vector3(cx, 0.15f, cz), bodyColors[ci]);
             }
         }
-
-        // Entrance sign at left bollard
-        SpawnEntranceSign(new Vector3(postX1 - 0.3f, 0f, side * (roadEdgeZ + 0.5f)));
     }
 
     void SpawnPrefabCar(Vector3 pos, int idx, Color bodyColor)

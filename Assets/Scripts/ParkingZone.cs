@@ -8,8 +8,8 @@ public class ParkingZone : MonoBehaviour
 {
     public float zoneLength = 40f;
     public int side = 1;
-    public float curbZ = 3.5f;     // must match road tile edge (7m wide road = ±3.5m)
-    public float parkingExtra = 4.5f;
+    public float curbZ = 3.6f;     // must match asphalt kerb
+    public float parkingExtra = 2.6f;
     public GameObject[] carPrefabs;
     public Material roadSurfaceMaterial; // set by ProceduralStreet — matches road tile asphalt
 
@@ -25,93 +25,90 @@ public class ParkingZone : MonoBehaviour
     {
         float bayZ = curbZ + parkingExtra;
 
-        // Dark grey asphalt slab for the parking bay
-        float roadSurfaceY = 0.15f;
-        float slabTop      = roadSurfaceY + 0.003f;
-        float slabH        = slabTop;
-        float slabCentreZ  = curbZ + parkingExtra * 0.5f;
-        var asphaltMat = Mat(new Color(0.20f, 0.20f, 0.20f));
+        // Asphalt bay — same material and height as the carriageway, replacing the sidewalk here.
+        float roadTop = 0.17f;
+        float slabH = 0.05f;
+        float slabCentreZ = curbZ + parkingExtra * 0.5f;
+        var asphaltMat = roadSurfaceMaterial != null ? roadSurfaceMaterial : Mat(new Color(0.25f, 0.25f, 0.25f));
         Block(asphaltMat,
-            new Vector3(zoneLength * 0.5f, slabTop - slabH * 0.5f, s * slabCentreZ),
+            new Vector3(zoneLength * 0.5f, roadTop - slabH * 0.5f, s * slabCentreZ),
             new Vector3(zoneLength, slabH, parkingExtra));
 
-        // Blue/white stripe only on the road-facing (inner) edge — left of the cars
-        int segs = Mathf.CeilToInt(zoneLength / 0.65f);
-        var blueMat  = Mat(new Color(0.10f, 0.22f, 0.80f));
-        var whiteMat = Mat(Color.white);
-        float stripeY = slabTop + 0.002f;
-        for (int i = 0; i < segs; i++)
-        {
-            var mat = (i % 2 == 0) ? blueMat : whiteMat;
-            Block(mat,
-                new Vector3(i * 0.65f + 0.325f, stripeY, s * curbZ),
-                new Vector3(0.63f, 0.012f, 0.22f));
-        }
+        // Blue/white blocks only on the sidewalk edge of the bay.
+        PaintBayKerb(s, bayZ);
 
-        // 5 parked cars nose-to-tail (parallel parking), ~6m apart
-        float carSpacing = 6.0f;
-        float startX = (zoneLength - carSpacing * 4f) * 0.5f;
-        for (int c = 0; c < 5; c++)
+        int carCount = 3;
+        float carSpacing = 7.0f;
+        float startX = (zoneLength - carSpacing * (carCount - 1)) * 0.5f;
+        float carZ = s * (curbZ + 1.2f);
+        for (int c = 0; c < carCount; c++)
         {
             float carX = startX + c * carSpacing;
-            float carZ = s * (curbZ + parkingExtra * 0.55f);
             if (carPrefabs != null && carPrefabs.Length > 0)
                 SpawnPrefabCar(new Vector3(carX, 0f, carZ), s, c);
-            else
-            {
-                Color[] fallbackColors = { new Color(0.91f,0.91f,0.91f), new Color(0.52f,0.54f,0.56f), new Color(0.12f,0.18f,0.38f) };
-                SpawnProceduralCar(new Vector3(carX, 0.15f, carZ), s, fallbackColors[c % 3]);
-            }
         }
+    }
 
-        // P sign at zone midpoint
-        SpawnParkingSign(new Vector3(zoneLength * 0.5f, 0f, s * (bayZ + 0.5f)), s);
+    void PaintBayKerb(int s, float z)
+    {
+        var go = new GameObject("BayCurb");
+        go.transform.SetParent(transform, false);
+        go.hideFlags = HideFlags.DontSave;
+        go.transform.localPosition = new Vector3(0f, 0.15f, 0f);
+        var stripe = go.AddComponent<CurbStripe>();
+        stripe.length = zoneLength;
+        stripe.side = s;
+        stripe.zOffset = z;
+        stripe.stripeHeight = 0.16f;
+        stripe.stripeWidth = 0.22f;
+        stripe.segmentLength = 0.65f;
+        stripe.blueWhite = true;
+        stripe.Build();
     }
 
     void SpawnPrefabCar(Vector3 pos, int s, int idx)
     {
-        var prefab = carPrefabs[idx % carPrefabs.Length];
-        var go = Application.isPlaying
-            ? Instantiate(prefab, transform)
-            : (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, transform);
+        var prefab = PickCurbCar(idx);
+        if (prefab == null) return;
+        GameObject go;
+#if UNITY_EDITOR
+        if (!Application.isPlaying)
+            go = (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, transform);
+        else
+#endif
+            go = Instantiate(prefab, transform);
         if (go == null) return;
         go.transform.localPosition = pos;
-        // Y=90 so car body runs along X (parallel to street); scale down slightly
+        // Y=90 so car body runs along X (parallel to street)
         go.transform.localRotation = Quaternion.Euler(0f, 90f, 0f);
-        go.transform.localScale = Vector3.one * 0.70f;
+        go.transform.localScale = Vector3.one * 0.85f;
         go.hideFlags = HideFlags.DontSave;
-
-        // Tint body to varied realistic Israeli car colors
-        Color[] bodyColors = {
-            new Color(0.91f, 0.91f, 0.91f), // white
-            new Color(0.52f, 0.54f, 0.56f), // silver-grey
-            new Color(0.12f, 0.18f, 0.38f), // dark blue
-        };
-        var rends = go.GetComponentsInChildren<Renderer>(true);
-        // First renderer is the car body (not a tire)
-        foreach (var r in rends)
-        {
-            if (r.gameObject.name.ToLower().Contains("tire")) continue;
-            var mat = new Material(r.sharedMaterial);
-            mat.color = bodyColors[idx % bodyColors.Length];
-            r.material = mat;
-            break;
-        }
-
-        // Yellow plates front and rear — offset along car's local Z (now = world X after rotation)
-        AddPlate(go.transform, new Vector3(0f, 0.3f, 2.1f));
-        AddPlate(go.transform, new Vector3(0f, 0.3f, -2.1f));
+        GroundCar(go);
     }
 
-    void AddPlate(Transform parent, Vector3 localPos)
+    static readonly string[] CurbCarNames = { "Hatchback Car_15", "Sport Car_39", "Pick Up_11" };
+
+    GameObject PickCurbCar(int idx)
     {
-        var plate = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        plate.transform.SetParent(parent, false);
-        plate.transform.localPosition = localPos;
-        plate.transform.localScale = new Vector3(0.44f, 0.13f, 0.03f);
-        plate.GetComponent<Renderer>().material = Mat(new Color(0.97f, 0.87f, 0.04f));
-        var col = plate.GetComponent<Collider>();
-        if (col) { if (Application.isPlaying) Destroy(col); else DestroyImmediate(col); }
+        if (carPrefabs == null || carPrefabs.Length == 0) return null;
+        if (idx < CurbCarNames.Length)
+        {
+            for (int i = 0; i < carPrefabs.Length; i++)
+            {
+                if (carPrefabs[i] != null && carPrefabs[i].name == CurbCarNames[idx])
+                    return carPrefabs[i];
+            }
+        }
+        return carPrefabs[idx % carPrefabs.Length];
+    }
+
+    static void GroundCar(GameObject go)
+    {
+        var rends = go.GetComponentsInChildren<Renderer>(true);
+        if (rends.Length == 0) return;
+        var b = rends[0].bounds;
+        for (int i = 1; i < rends.Length; i++) b.Encapsulate(rends[i].bounds);
+        go.transform.position += new Vector3(0f, -b.min.y + 0.17f, 0f);
     }
 
     void SpawnProceduralCar(Vector3 localPos, int s, Color bodyCol)
