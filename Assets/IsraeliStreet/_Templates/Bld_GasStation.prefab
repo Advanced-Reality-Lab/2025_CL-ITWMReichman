@@ -141,6 +141,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 279124505796832318}
     m_Modifications:
+    - target: {fileID: -6482314538233162333, guid: d935db64ffff2496e86bece8ec63c408, type: 3}
+      propertyPath: m_Materials.Array.size
+      value: 5
+      objectReference: {fileID: 0}
     - target: {fileID: -3910990755373119420, guid: d935db64ffff2496e86bece8ec63c408, type: 3}
       propertyPath: m_LocalScale.x
       value: 0.28
@@ -345,6 +349,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: paz_station
       objectReference: {fileID: 0}
+    - target: {fileID: 9161252954422795518, guid: d935db64ffff2496e86bece8ec63c408, type: 3}
+      propertyPath: m_Mesh
+      value: 
+      objectReference: {fileID: 4300000, guid: 4e0513455bbd64cd8b1bd7a3b21c2f0b, type: 2}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects:

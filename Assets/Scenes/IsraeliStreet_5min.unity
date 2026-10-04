@@ -2877,7 +2877,7 @@ Material:
     - _UVSec: 0
     - _ZWrite: 1
     m_Colors:
-    - _Color: {r: 0.58, g: 0.55, b: 0.42, a: 1}
+    - _Color: {r: 0.45, g: 0.45, b: 0.45, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1
@@ -14621,7 +14621,7 @@ MonoBehaviour:
   billboardAds: []
   billboardEveryNChunks: 2
   billboardsPerChunk: 1
-  seedOffset: 42
+  seedOffset: 5
   showEditorPreview: 1
   driveLength: 9
   chunksPerBlock: 5

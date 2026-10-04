@@ -414,7 +414,7 @@ public class ProceduralStreet : MonoBehaviour
         int bsBaySide = 0;
         float bsBayGapStart = -1f, bsBayGapEnd = -1f;
 
-        if (busStopPrefabs != null && busStopPrefabs.Length > 0 && rng.NextDouble() < 0.85)
+        if (busStopPrefabs != null && busStopPrefabs.Length > 0)
         {
             var pf = busStopPrefabs[rng.Next(busStopPrefabs.Length)];
             int bsT = rng.Next(tilesPerChunk);
@@ -461,10 +461,22 @@ public class ProceduralStreet : MonoBehaviour
             }
 
             var g = InstantiateChild(pf, chunk.transform);
-            float shelterZ = bsSide * (RoadEdgeZ + 1.6f);
-            g.transform.position = new Vector3(chunkStartX + bsT * tileLength, 0f, shelterZ);
+            float wantX = chunkStartX + bsT * tileLength + bayLen * 0.25f;
             g.transform.rotation = Quaternion.Euler(0f, bsSide > 0 ? 0f : 180f, 0f) * g.transform.rotation;
+            g.transform.localScale *= 1.65f;
+            g.transform.position = new Vector3(wantX, 0f, bsSide * (RoadEdgeZ + 1.2f));
             GroundAlign(g);
+            Bounds shelterBounds;
+            if (TryGetRendererBounds(g, out shelterBounds))
+            {
+                float inner = bsSide > 0 ? shelterBounds.min.z : shelterBounds.max.z;
+                float wantInner = bsSide * (RoadEdgeZ + 0.35f);
+                var p = g.transform.position;
+                g.transform.position = new Vector3(
+                    p.x + (wantX - shelterBounds.center.x),
+                    p.y + roadY,
+                    p.z + (wantInner - inner));
+            }
         }
 
         // GasStation blocks always spawn billboards (more of them); other blocks use the normal cadence.
@@ -713,6 +725,7 @@ public class ProceduralStreet : MonoBehaviour
 
             model.transform.localPosition = Vector3.zero;
             model.transform.localRotation = Quaternion.identity;
+            model.transform.localScale = Vector3.one * 0.72f;
 
             // Ground-align: shift up so feet sit at Y=0
             var rends = model.GetComponentsInChildren<Renderer>();
