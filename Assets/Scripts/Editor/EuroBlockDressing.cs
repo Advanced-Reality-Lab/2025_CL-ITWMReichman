@@ -29,6 +29,39 @@ public static partial class EuroBlockLayout
         "Assets/IsraeliStreet/_Templates/BusStop_BusStop_4.prefab"
     };
     const string AuraDir = "Assets/Aura Landscape/Prefabs/";
+    static readonly string[] WalkerPaths = { "Assets/Walking.fbx", "Assets/Walking (1).fbx" };
+    const float WalkerSpacing = 100f;   // metres of sidewalk per pedestrian (each model is ~50k triangles)
+    const float WalkerScale = 0.82f;
+
+    static void SpawnWalker(GameObject model, Transform parent, Vector3[] path, float startDist, bool reverse, float speed)
+    {
+        var root = new GameObject("Pedestrian");
+        Undo.RegisterCreatedObjectUndo(root, "Euro dressing");
+        root.transform.SetParent(parent, false);
+        var walker = root.AddComponent<CityWalker>();
+        walker.path = path;
+        walker.speed = speed;
+        walker.reverse = reverse;
+        walker.distance = startDist;
+        Vector3 dir;
+        root.transform.position = walker.Sample(startDist, out dir);
+        if (reverse) dir = -dir;
+        root.transform.rotation = Quaternion.LookRotation(dir.sqrMagnitude > 1e-4f ? dir : Vector3.forward, Vector3.up);
+
+        var inst = (GameObject)PrefabUtility.InstantiatePrefab(model);
+        Undo.RegisterCreatedObjectUndo(inst, "Euro dressing");
+        inst.transform.SetParent(root.transform, false);
+        inst.transform.localPosition = Vector3.zero;
+        inst.transform.localRotation = Quaternion.identity;
+        inst.transform.localScale = Vector3.one * WalkerScale;
+        var rs = inst.GetComponentsInChildren<Renderer>();
+        if (rs.Length > 0)
+        {
+            Bounds bb = rs[0].bounds;
+            foreach (var r in rs) bb.Encapsulate(r.bounds);
+            inst.transform.position += Vector3.up * (GroundY - bb.min.y);
+        }
+    }
 
     class BlockInfo
     {
@@ -67,7 +100,14 @@ public static partial class EuroBlockLayout
             foreach (Transform t in oldStops.transform)
                 if (t.gameObject.activeSelf) { Undo.RecordObject(t.gameObject, "Euro dressing"); t.gameObject.SetActive(false); oldRec.hidden.Add(t.gameObject); }
 
-        int nStops = 0, nStreetTrees = 0, nParkTrees = 0, nPlay = 0, nHiddenKept = 0;
+        var walkers = new List<GameObject>();
+        foreach (var p in WalkerPaths)
+        {
+            var w = AssetDatabase.LoadAssetAtPath<GameObject>(p);
+            if (w != null) walkers.Add(w);
+        }
+
+        int nStops = 0, nStreetTrees = 0, nParkTrees = 0, nPlay = 0, nHiddenKept = 0, nWalkers = 0;
         var stopPositions = new List<Vector3>();
 
         // Bus stops: longest street-facing edge per block, spaced out across the city.
@@ -143,6 +183,24 @@ public static partial class EuroBlockLayout
                 }
             }
 
+            // Pedestrians walking the sidewalk loop around the block, between the trees and the facades.
+            if (walkers.Count > 0)
+            {
+                var loop = Offset(b.poly, 1.9f);
+                float perim = 0f;
+                for (int i = 0; i < loop.Count; i++) perim += Vector3.Distance(loop[i], loop[(i + 1) % loop.Count]);
+                int count = Mathf.FloorToInt(perim / WalkerSpacing);
+                if (count == 0 && perim > 80f) count = 1;
+                var path = new Vector3[loop.Count];
+                for (int i = 0; i < loop.Count; i++) path[i] = new Vector3(loop[i].x, GroundY, loop[i].z);
+                for (int k = 0; k < count; k++)
+                {
+                    float h = Hash(perim * 0.13f + k * 7.31f, b.poly[0].x + k);
+                    SpawnWalker(walkers[(nWalkers + k) % walkers.Count], dress, path, perim * (k + h * 0.5f) / count, h > 0.5f, 1.1f + h * 0.4f);
+                    nWalkers++;
+                }
+            }
+
             // Courtyard park: playground at the most interior point, trees around it.
             int best = -1, bestD = 0, area = 0;
             for (int i = 0; i < b.dist.Length; i++)
@@ -174,7 +232,7 @@ public static partial class EuroBlockLayout
         }
 
         return "bus stops " + nStops + " (old hidden " + oldRec.hidden.Count + "), street trees " + nStreetTrees +
-               ", park trees " + nParkTrees + ", playgrounds " + nPlay + ", kept items hidden under rows " + nHiddenKept;
+               ", park trees " + nParkTrees + ", playgrounds " + nPlay + ", pedestrians " + nWalkers + ", kept items hidden under rows " + nHiddenKept;
     }
 
     static List<BlockInfo> CollectBlocks(byte[] kind, Transform root)
