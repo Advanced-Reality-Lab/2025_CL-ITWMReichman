@@ -10,8 +10,8 @@ public static partial class EuroBlockLayout
     const string DressingName = "Dressing";
     const string OldStopsName = "HiddenOldBusStops";
     const int CourtyardDist = 16;          // matches BuildCourtyard threshold (Sidewalk + Depth + 1)
-    const float StopSpacing = 75f;
-    const float StreetTreeSpacing = 24f;
+    const float StopSpacing = 45f;
+    const float StreetTreeSpacing = 40f;
 
     static readonly string[] PalmPaths =
     {
@@ -110,27 +110,23 @@ public static partial class EuroBlockLayout
         int nStops = 0, nStreetTrees = 0, nParkTrees = 0, nPlay = 0, nHiddenKept = 0, nWalkers = 0;
         var stopPositions = new List<Vector3>();
 
-        // Bus stops: longest street-facing edge per block, spaced out across the city.
+        // Bus stops: every long street-facing edge is a candidate, longest first, spaced out across the city.
         var candidates = new List<KeyValuePair<float, object[]>>();
         foreach (var b in blocks)
         {
             int n = b.poly.Count;
-            float bestLen = 0f;
-            object[] best = null;
             for (int i = 0; i < n; i++)
             {
                 Vector3 a = b.poly[i], c = b.poly[(i + 1) % n];
                 float len = Vector3.Distance(a, c);
-                if (len < 28f || len <= bestLen) continue;
+                if (len < 22f) continue;
                 Vector3 t = (c - a) / len;
                 Vector3 inward = LeftNormal(t);
                 Vector3 mid = (a + c) * 0.5f;
                 int roadCell = Cell(mid.x - inward.x * 4f, mid.z - inward.z * 4f);
                 if (roadCell < 0 || kind[roadCell] != 2) continue;
-                bestLen = len;
-                best = new object[] { b, mid, t, inward };
+                candidates.Add(new KeyValuePair<float, object[]>(len, new object[] { b, mid, t, inward }));
             }
-            if (best != null) candidates.Add(new KeyValuePair<float, object[]>(bestLen, best));
         }
         candidates.Sort((x, y) => y.Key.CompareTo(x.Key));
         var stopsPerBlock = new Dictionary<BlockInfo, List<Vector3>>();
@@ -166,7 +162,7 @@ public static partial class EuroBlockLayout
             {
                 Vector3 a = line[i], c = line[(i + 1) % n];
                 float len = Vector3.Distance(a, c);
-                float margin = 7f;
+                float margin = 10f;
                 if (len < margin * 2f + 1f) continue;
                 int count = Mathf.FloorToInt((len - margin * 2f) / StreetTreeSpacing) + 1;
                 float step = count > 1 ? (len - margin * 2f) / (count - 1) : 0f;
@@ -178,6 +174,7 @@ public static partial class EuroBlockLayout
                     if (myStops != null) foreach (var s in myStops) if (Vector3.Distance(s, p) < 7f) nearStop = true;
                     if (nearStop) continue;
                     float h = Hash(p.x, p.z);
+                    if (Hash(p.z * 0.71f, p.x * 1.33f) < 0.35f) continue;   // irregular gaps, not a solid avenue
                     Place(palms[Pick(h, 997, palms.Count)], dress, "StreetTree", p, Vector3.forward, h * 360f, 1.35f + h * 0.3f);
                     nStreetTrees++;
                 }
@@ -220,7 +217,7 @@ public static partial class EuroBlockLayout
                 for (int ix = 0; ix < NX; ix += 12)
                 {
                     float jx = (Hash(ix, iz) - 0.5f) * 8f, jz = (Hash(iz, ix) - 0.5f) * 8f;
-                    if (Hash(ix * 0.37f, iz * 1.91f) < 0.3f) continue;
+                    if (Hash(ix * 0.37f, iz * 1.91f) < 0.55f) continue;
                     int cell = Cell(X0 + ix + 0.5f + jx, Z0 + iz + 0.5f + jz);
                     if (cell < 0 || !b.mask[cell] || b.dist[cell] < CourtyardDist + 3) continue;
                     Vector3 p = new Vector3(X0 + ix + 0.5f + jx, 0f, Z0 + iz + 0.5f + jz);
