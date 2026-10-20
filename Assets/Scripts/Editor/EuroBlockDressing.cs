@@ -30,7 +30,7 @@ public static partial class EuroBlockLayout
     };
     const string AuraDir = "Assets/Aura Landscape/Prefabs/";
     static readonly string[] WalkerPaths = { "Assets/Walking.fbx", "Assets/Walking (1).fbx" };
-    const float WalkerSpacing = 100f;   // metres of sidewalk per pedestrian (each model is ~50k triangles)
+    const float WalkerSpacing = 200f;   // metres of sidewalk per pedestrian (each model is ~50k triangles)
     const float WalkerScale = 0.82f;
 
     static void SpawnWalker(GameObject model, Transform parent, Vector3[] path, float startDist, bool reverse, float speed)
@@ -187,7 +187,7 @@ public static partial class EuroBlockLayout
                 float perim = 0f;
                 for (int i = 0; i < loop.Count; i++) perim += Vector3.Distance(loop[i], loop[(i + 1) % loop.Count]);
                 int count = Mathf.FloorToInt(perim / WalkerSpacing);
-                if (count == 0 && perim > 80f) count = 1;
+                if (count == 0 && perim > 160f) count = 1;
                 var path = new Vector3[loop.Count];
                 for (int i = 0; i < loop.Count; i++) path[i] = new Vector3(loop[i].x, GroundY, loop[i].z);
                 for (int k = 0; k < count; k++)

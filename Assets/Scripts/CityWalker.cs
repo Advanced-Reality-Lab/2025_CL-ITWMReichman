@@ -31,15 +31,19 @@ public class CityWalker : MonoBehaviour
         _total = _cum[path.Length];
     }
 
-    void Update()
+    void Update() { Step(Time.deltaTime); }
+
+    // Also driven from the editor by Tools/Euro Blocks/Preview Pedestrians Walking.
+    public void Step(float dt)
     {
+        if (_cum == null) Prepare();
         if (_cum == null || _total < 0.1f) return;
-        distance = Mathf.Repeat(distance + (reverse ? -speed : speed) * Time.deltaTime, _total);
+        distance = Mathf.Repeat(distance + (reverse ? -speed : speed) * dt, _total);
         Vector3 dir;
         transform.position = Sample(distance, out dir);
         if (reverse) dir = -dir;
         if (dir.sqrMagnitude > 1e-4f)
-            transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(dir, Vector3.up), 6f * Time.deltaTime);
+            transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(dir, Vector3.up), 6f * dt);
     }
 
     public Vector3 Sample(float s, out Vector3 dir)
